@@ -1,9 +1,9 @@
 ---
 title: "Lab 05 - Data Wrangling"
 output: 
-  github_document: default
   tufte::tufte_html:
     css: style.css
+  github_document: default
 link-citations: yes
 ---
 
@@ -156,11 +156,13 @@ str(met)
 #   atm.press = mean(atm.press, na.rm = TRUE)
 # ), by = "USAFID"]
 
-met_avg_lz <- met %>% group_by(USAFID) %>%
-  summarise(across(
+met_avg_lz <- met %>% 
+  group_by(USAFID) %>%
+  summarise(STATE, lat, lon, across(
     c(temp, wind.sp, atm.press),
     function(x) mean(x, na.rm = TRUE)
-  ))
+  )) %>%
+  distinct(USAFID, .keep_all = TRUE)
 #group_by summarize across(c(), function(X) mean(X, na.rm =))
 ```
 
@@ -168,7 +170,7 @@ met_avg_lz <- met %>% group_by(USAFID) %>%
 ```{r}
 met_med_lz <- met_avg_lz %>%
   summarise(across(
-    2:4,
+    c(temp, wind.sp, atm.press),
     function(x) quantile(x, probs =0.5, na.rm =TRUE)
   ))
 
@@ -218,9 +220,41 @@ Knit the document, commit your changes, and save it on GitHub. Don't forget to a
 
 Just like the previous question, you are asked to identify what is the most representative, the median, station per state. This time, instead of looking at one variable at a time, look at the euclidean distance. If multiple stations show in the median, select the one located at the lowest latitude.
 
-```{r}
 
+```{r}
+met_med_state <- met_avg_lz %>%
+  group_by(STATE) %>%
+  summarise(temp = median(temp, na.rm = TRUE), 
+            wind.sp = median(wind.sp, na.rm = TRUE),
+            atm.press = median(atm.press, na.rm = TRUE))
 ```
+```{r}
+met_avg_med <- merge(
+  x = met_avg_lz,
+  y = met_med_state,
+  by.x = "STATE",
+  by.y = "STATE",
+  all.x = TRUE,
+  all.y = FALSE)
+```
+```{r}
+met_d <- met_avg_med %>%
+  mutate(d = sqrt((temp.x - temp.y)^2 + (wind.sp.x - wind.sp.y)^2 + (atm.press.x - atm.press.y)^2))
+```
+```{r}
+repre_state <- met_d %>%
+  group_by(STATE) %>%
+  slice_min(order_by = d) %>%
+  summarise(STATE, USAFID, lat, lon, d)
+repre_state
+```
+
+
+```{r}
+as.data.table(met_avg_lz %>% filter(STATE == "WA" | STATE == "ND"))
+```
+All stations in WA and ND doesn't have atm.press, so I cannot figure out the representative station for these two state.
+
 
 Knit the doc and save it on GitHub.
 
@@ -229,7 +263,38 @@ Knit the doc and save it on GitHub.
 For each state, identify what is the station that is closest to the mid-point of the state. Combining these with the stations you identified in the previous question, use `leaflet()` to visualize all ~100 points in the same figure, applying different colors for those identified in this question.
 
 ```{r}
+met_avg_state <- met_avg_lz %>%
+  group_by(STATE) %>%
+  summarise(lat = mean(lat, na.rm = TRUE), 
+            lon = mean(lon, na.rm = TRUE))
+```
+```{r}
+met_avg_avg <- merge(
+  x = met_avg_lz,
+  y = met_avg_state,
+  by.x = "STATE",
+  by.y = "STATE",
+  all.x = TRUE,
+  all.y = FALSE)
+```
+```{r}
+met_d_avg <- met_avg_avg %>%
+  mutate(d = sqrt((lat.x - lat.y)^2 + (lon.x - lon.y)^2))
+```
+```{r}
+mid_state <- met_d_avg %>%
+  group_by(STATE) %>%
+  slice_min(order_by = d) %>%
+  summarise(STATE, USAFID, lat = lat.x, lon = lon.x, d)
+mid_state
+```
 
+```{r}
+library(leaflet)
+leaflet() %>% 
+  addProviderTiles('CartoDB.Positron') %>% 
+  addCircles(data = mid_state, lat=~lat, lng=~lon, popup="mid station", opacity=1, fillOpacity=1, radius=400, color="Blue") %>% 
+  addCircles(data = repre_state, lat=~lat, lng=~lon, popup="representative station", opacity=1, fillOpacity=1, radius=400, color="Red")
 ```
 
 Knit the doc and save it on GitHub.
@@ -245,7 +310,10 @@ Start by computing the states' average temperature. Use that measurement to clas
 - High: temp >= 25
 
 ```{r}
-
+met[, state_temperature := mean(temp, na.rm = TRUE), by=STATE]
+met[, temp_level:= 
+      fifelse(state_temperature <20, "low", 
+              fifelse(state_temperature <25, "mid", "high"))]
 ```
 
 Once you are done with that, you can compute the following:
@@ -259,7 +327,16 @@ Once you are done with that, you can compute the following:
 All by the levels described before.
 
 ```{r}
-
+table(met$temp_level, useNA="always")
+tab <- met[, .(N_entries = .N,
+               N_na = sum(is.na(temp_level)),
+               N_stations = length(unique(USAFID)),
+               N_states = length(unique(STATE)),
+               mean_temp = mean(temp, na.rm = TRUE),
+               mean_wind.sp = mean(wind.sp, na.rm = TRUE),
+               mean_atm.press = mean(atm.press, na.rm = TRUE)),
+           by=temp_level]
+tab
 ```
 
 Knit the document, commit your changes, and push them to GitHub. 
@@ -273,6 +350,23 @@ Let's practice running regression models with smooth functions on X. We need the
 
 - fit both a linear model and a spline model (use `gam()` with a cubic regression spline on wind speed). Summarize and plot the results from the models and interpret which model is the best fit and why.
 
-```{r}
 
+```{r}
+library(ggplot2)
+ggplot(as.data.frame(met_med_state), aes(x = wind.sp, y = temp)) +
+  geom_point() +
+  geom_smooth(color="red", se = FALSE) +
+  geom_smooth(method = "lm", se = FALSE)
 ```
+```{r}
+library(mgcv)
+gam_mod <- gam(temp ~ s(wind.sp, bs="cr", k=20), data = as.data.frame(met_med_state))
+summary(gam_mod)
+plot(gam_mod)
+```
+```{r last chunk}
+lm_mod <- lm(temp ~ wind.sp, data = met_med_state)
+summary(lm_mod)
+plot(lm_mod)
+```
+From two summary table, we can see that gam model is better than linear model. Because the p value of t test for linear model is 0.836, which is too big, and from residual plot, we can easily find that the residuals are not i.i.d from normal distribution. So linear model is not good enough in this case.
